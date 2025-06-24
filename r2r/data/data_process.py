@@ -16,6 +16,7 @@ class MismatchPoint:
     """Represents a point where small (1.5B) and reference (32B) model predictions differ"""
     data_id: int
     token_id: int  # token ID in the sequence
+    sample_id: int # sample ID in the sequence
     real_token: int
     prev_real_token: int # the previous real token of current token
     pred_small_token: int
@@ -33,6 +34,7 @@ class MismatchPoint:
         """Print mismatch information in a formatted way"""
         print(f"  Data ID: {self.data_id}")
         print(f"  Token ID: {self.token_id}")
+        print(f"  Sample ID: {self.sample_id}")
         print('%r' % f"  Update context:{self.update_context_text}'")
         print('%r' % f"  Real token: '{self.real_text}' (token value: {self.real_token})")
         print('%r' % f"  Small model prediction: '{self.pred_small_text}' (token value: {self.pred_small_token})")
@@ -191,44 +193,48 @@ class DataProcessor:
                     else:
                         token_samples = [int(current_row['SLM_predictions'])]
                     
-                    # The token_id and real_text should come from the next position
-                    # since predictions are for the next token
-                    if self.comparison_model == 'reference':
-                        mismatch = MismatchPoint(
-                            data_id=int(current_row['data_id']),
-                            token_id=int(next_row['token_id']),  # Position being predicted
-                            prev_real_token=int(current_row['real_token']),  # Previous real token of current token
-                            real_token=int(next_row['real_token']),  # Actual next token
-                            pred_small_token=int(current_row['SLM_predictions']),  # Small model's prediction for next token
-                            pred_reference_token=int(current_row['LLM_predictions']),  # Reference model's prediction for next token
-                            pred_small_text=self._decode_token(int(current_row['SLM_predictions']), is_reference=False),
-                            pred_reference_text=self._decode_token(int(current_row['LLM_predictions']), is_reference=True),
-                            real_text=self._decode_token(int(next_row['real_token'])),
-                            current_token_samples=token_samples,
-                            update_context_tokens=[],
-                            update_context_text="",
-                            context_tokens=[],
-                            context_text=""
-                        )
-                        mismatches.append(mismatch)
-                    else: # 'real'
-                        mismatch = MismatchPoint(
-                            data_id=int(current_row['data_id']),
-                            token_id=int(next_row['token_id']),  # Position being predicted
-                            prev_real_token=int(current_row['real_token']),  # Previous real token of current token
-                            real_token=int(next_row['real_token']),  # Actual next token
-                            pred_small_token=int(current_row['SLM_predictions']),  # Small model's prediction for next token
-                            pred_reference_token = None,
-                            pred_small_text=self._decode_token(int(current_row['SLM_predictions']), is_reference=False),
-                            pred_reference_text=None,
-                            real_text=self._decode_token(int(next_row['real_token'])),
-                            current_token_samples=token_samples,
-                            update_context_tokens=[],
-                            update_context_text="",
-                            context_tokens=[],
-                            context_text=""
-                        )
-                        mismatches.append(mismatch)
+                    # Create a mismatch for each token sample
+                    for sample_id, sample_token in enumerate(token_samples):
+                        # The token_id and real_text should come from the next position
+                        # since predictions are for the next token
+                        if self.comparison_model == 'reference':
+                            mismatch = MismatchPoint(
+                                data_id=int(current_row['data_id']),
+                                token_id=int(next_row['token_id']),  # Position being predicted
+                                sample_id=sample_id,  # Sample ID for this token sample
+                                prev_real_token=int(current_row['real_token']),  # Previous real token of current token
+                                real_token=int(next_row['real_token']),  # Actual next token
+                                pred_small_token=sample_token,  # Small model's prediction for next token (from sample)
+                                pred_reference_token=int(current_row['LLM_predictions']),  # Reference model's prediction for next token
+                                pred_small_text=self._decode_token(sample_token, is_reference=False),
+                                pred_reference_text=self._decode_token(int(current_row['LLM_predictions']), is_reference=True),
+                                real_text=self._decode_token(int(next_row['real_token'])),
+                                current_token_samples=token_samples,
+                                update_context_tokens=[],
+                                update_context_text="",
+                                context_tokens=[],
+                                context_text=""
+                            )
+                            mismatches.append(mismatch)
+                        else: # 'real'
+                            mismatch = MismatchPoint(
+                                data_id=int(current_row['data_id']),
+                                token_id=int(next_row['token_id']),  # Position being predicted
+                                sample_id=sample_id,  # Sample ID for this token sample
+                                prev_real_token=int(current_row['real_token']),  # Previous real token of current token
+                                real_token=int(next_row['real_token']),  # Actual next token
+                                pred_small_token=sample_token,  # Small model's prediction for next token (from sample)
+                                pred_reference_token = None,
+                                pred_small_text=self._decode_token(sample_token, is_reference=False),
+                                pred_reference_text=None,
+                                real_text=self._decode_token(int(next_row['real_token'])),
+                                current_token_samples=token_samples,
+                                update_context_tokens=[],
+                                update_context_text="",
+                                context_tokens=[],
+                                context_text=""
+                            )
+                            mismatches.append(mismatch)
             except Exception as e:
                 logger.error(f"Error processing data item {data_id}: {str(e)}")
                 continue
@@ -296,7 +302,7 @@ class DataProcessor:
         
         # Sort within each data item and extract context
         for data_id, data_mismatches in tqdm(grouped.items(), desc="Finding context for mismatches"):
-            data_mismatches.sort(key=lambda x: x.token_id)
+            data_mismatches.sort(key=lambda x: (x.token_id, x.sample_id))
             logger.info(f"Processing {len(data_mismatches)} mismatches in data item {data_id}")
             
             # Extract context for each mismatch
@@ -327,6 +333,7 @@ class DataProcessor:
                 mismatch_data = {
                     'data_id': mismatch.data_id,
                     'token_id': mismatch.token_id,
+                    'sample_id': mismatch.sample_id,
                     'real_token': mismatch.real_token,
                     'pred_small_token': mismatch.pred_small_token,
                     'pred_reference_token': mismatch.pred_reference_token,

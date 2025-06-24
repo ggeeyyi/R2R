@@ -102,7 +102,13 @@ def main():
         print(f"Loaded {len(sample_data)} rows with all data sample IDs")
 
     # Process the data
-    processor = DataProcessor(sample_data, max_tokens=args.max_tokens, comparison_model='real')
+    if args.temperature != 0.0 and args.top_p != 1.0:
+        is_multi_pred = True
+    else:
+        is_multi_pred = False
+    print(f"Using multi_pred: {is_multi_pred}")
+    
+    processor = DataProcessor(sample_data, max_tokens=args.max_tokens, comparison_model='real', is_multi_pred=is_multi_pred)
 
     # Initialize the generation controller and verify model
     gen_controller = ModelController(comparison_model='real', mem_fraction_static=args.gen_mem_fraction, tp_size=args.tp_size, dp_size=args.dp_size)
@@ -145,15 +151,15 @@ def main():
             
             for mismatch in batch_mismatches:
                 # Store mismatch point for later reference
-                mismatch_points_by_id[(mismatch.data_id, mismatch.token_id)] = mismatch
-                data_mismatch_points[(mismatch.data_id, mismatch.token_id)] = mismatch
+                mismatch_points_by_id[(mismatch.data_id, mismatch.token_id, mismatch.sample_id)] = mismatch
+                data_mismatch_points[(mismatch.data_id, mismatch.token_id, mismatch.sample_id)] = mismatch
                 
                 # Add to batch input lists
                 context_tokens_list.append(mismatch.context_tokens)
                 current_tokens_list.append(mismatch.pred_small_token)
                 
                 if args.is_print:
-                    print(f"\nMismatch (data_id={mismatch.data_id}, token_id={mismatch.token_id}):")
+                    print(f"\nMismatch (data_id={mismatch.data_id}, token_id={mismatch.token_id}, sample_id={mismatch.sample_id}):")
                     mismatch.print()
 
             # Small model generation - generate outputs for all mismatches in batch
@@ -231,6 +237,7 @@ def main():
                     result = {
                         'data_id': mismatch.data_id,
                         'token_id': mismatch.token_id,
+                        'sample_id': mismatch.sample_id,
                         'small_diverge_text': small_diverge_context,
                         'reference_diverge_text': comparison_diverge_context,
                         'common_context': common_context

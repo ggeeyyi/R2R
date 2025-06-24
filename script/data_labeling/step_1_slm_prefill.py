@@ -362,7 +362,7 @@ def process_dataset(args):
         data_ids=data_ids,
         token_types=token_types,
         all_predictions=all_predictions,
-        topk=args.topk,
+        top_k=args.top_k,
         temperature=args.temperature,
         top_p=args.top_p,
     )
@@ -378,7 +378,7 @@ def create_data_analysis(
     data_ids,
     token_types,
     all_predictions,
-    topk=16,
+    top_k=16,
     temperature=0.6,
     top_p=1.0,
 ):
@@ -417,7 +417,7 @@ def create_data_analysis(
             probs = torch.nn.functional.softmax(top_logits / temperature, dim=-1)
 
             # Vectorized top-p calculation
-            # Sort probabilities and get corresponding indices within the topk dimension
+            # Sort probabilities and get corresponding indices within the top_k dimension
             sorted_probs, indices_in_sorted = torch.sort(probs, dim=-1, descending=True)
             cumsum_probs = torch.cumsum(sorted_probs, dim=-1)
 
@@ -427,6 +427,7 @@ def create_data_analysis(
 
             # Create list to store variable-length prediction samples
             all_samples = []
+            all_probs = []
 
             # Iterate through each row to apply the mask and get final token indices
             for i in tqdm(
@@ -437,22 +438,34 @@ def create_data_analysis(
                 row_top_indices = top_indices[
                     i
                 ]  # Original token indices from the loaded data
+                row_probs = probs[i]  # Original probabilities for this row
 
                 # Get the indices within the sorted list that satisfy the top-p condition
                 filtered_indices_in_sorted = row_indices_in_sorted[row_mask]
 
-                # Limit by topk
-                k = min(topk, len(filtered_indices_in_sorted))
+                # Limit by top_k
+                k = min(top_k, len(filtered_indices_in_sorted))
                 final_indices_in_sorted = filtered_indices_in_sorted[:k]
 
                 # Map these indices back to the original token IDs using the loaded top_indices
                 final_token_ids = row_top_indices[final_indices_in_sorted]
 
-                # Add to list
-                all_samples.append(final_token_ids.cpu().tolist())
+                # Get the corresponding probabilities directly from row_probs using the same indices
+                final_probs = row_probs[final_indices_in_sorted].tolist()
 
-            # Add variable-length predictions to dataframe
+                # Normalize the probabilities to sum to 1
+                if final_probs:
+                    prob_sum = sum(final_probs)
+                    if prob_sum > 0:
+                        final_probs = [p / prob_sum for p in final_probs]
+
+                # Add to lists
+                all_samples.append(final_token_ids.cpu().tolist())
+                all_probs.append(final_probs)
+
+            # Add variable-length predictions and probabilities to dataframe
             df["SLM_prediction_samples"] = all_samples
+            df["SLM_prediction_probs"] = all_probs
 
     # Save to CSV
     output_file = os.path.join(output_path, "prediction_comparison.csv")
@@ -491,7 +504,7 @@ def main():
         help="Range of dataset samples to process [start_idx, end_idx]",
     )
     parser.add_argument(
-        "--topk",
+        "--top_k",
         type=int,
         default=1,
         help="Number of top predictions to include in the output",
